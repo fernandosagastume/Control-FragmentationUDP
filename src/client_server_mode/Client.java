@@ -30,6 +30,7 @@ public class Client {
     public static String currentSeqNum;
     public static String currentAckNum;
     private static final Logger LOGGER = Logger.getLogger(Client.class.getName());
+    private static PacketSC currentPacket;
 
     @SuppressWarnings("FieldMayBeFinal")
     private static Thread tcp_con = new Thread(new Runnable(){
@@ -93,6 +94,7 @@ public class Client {
                             sendData(send_packet_ack.packetHEX());
                             currentSeqNum = send_packet_ack.SEQ_NUM;
                             currentAckNum = send_packet_ack.ACK_NUM;
+                            currentPacket = send_packet_ack;
                             TCPCon_phase = 2;
                         }
                     }
@@ -117,6 +119,7 @@ public class Client {
                                     send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE);
                             send_packet_ack.setCHECKSUM(chsm);
                             sendData(send_packet_ack.packetHEX());
+                            currentPacket = send_packet_ack;
                             TCPCon_phase = 3;
                         }
                         else{
@@ -204,7 +207,7 @@ public class Client {
                                 currentSeqNum = send_packet_ack.SEQ_NUM;
                                 currentAckNum = send_packet_ack.ACK_NUM;
                                 sendData(send_packet_ack.packetHEX());
-
+                                currentPacket = send_packet_ack;
                             }
                         }
                     }
@@ -228,15 +231,20 @@ public class Client {
                                 send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE);
                         send_packet_ack.setCHECKSUM(chsm);
                         sendData(send_packet_ack.packetHEX());
-
-
+                        currentPacket = send_packet_ack;
                         break;
                     }
                 }//fin del try
                 catch (Exception e){
                     LOGGER.log(Level.SEVERE, "<Cliente> No se pudo recibir el paquete. " + e.getMessage());
                 }
-
+                LOGGER.log(Level.INFO, "<Cliente>" + "Fase " + TCPCon_phase + " Mensaje del cliente: \n" +
+                        "Source Port: " + currentPacket.SOURCE_PORT + "\nDestination Port: " +
+                        currentPacket.DESTINATION_PORT +"\nSequence Number: " +
+                        currentPacket.SEQ_NUM + "\nACK Number: "+ currentPacket.ACK_NUM +
+                        "\nACK Flag: " + currentPacket.ACK_FLAG + "\nSYN Flag: " + currentPacket.SYN_FLAG +
+                        "\nFYN Flag: " + currentPacket.FYN_FLAG + "\n Window Size: " + currentPacket.WINDOW_SIZE +
+                        "\nChecksum: " + currentPacket.CHECKSUM);
             }//fin del while
             mySocket.close();
             LOGGER.log(Level.INFO,"<Cliente> Conexion con servidor finalizada");
