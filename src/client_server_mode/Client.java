@@ -9,6 +9,7 @@ import java.math.BigInteger;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.SocketException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Scanner;
@@ -46,6 +47,12 @@ public class Client {
             int payload_length = 1460;
             //Se divide en 2 para que se puedan mandar bien los strings
             splitByteArray(fragmentedBytes, filetoBytes, payload_length/2);
+            try {
+                mySocket.setSoTimeout(5000);
+            } catch (SocketException e) {
+                LOGGER.log(Level.SEVERE, "No hubo respuesta... Retransmision. " + e.getMessage());
+                sendData(currentPacket.packetHEX());
+            }
 
             while(true) {
                 //payload data size + header

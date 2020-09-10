@@ -45,7 +45,7 @@ public class Main {
                         port = Integer.parseInt(pn);
                         System.out.print("Por favor ingrese el nombre del archivo que desea enviar: ");
                         fileName = br3.readLine();
-                        c = new Client(port, InetAddress.getLocalHost(), fileName);
+                        c = new Client(port, InetAddress.getByName(ipA), fileName);
                         LOGGER.log(Level.INFO, "Se inicio el programa como modo CLIENTE");
                         break;
             case "servidor":
