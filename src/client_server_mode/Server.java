@@ -1,12 +1,10 @@
 package client_server_mode;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import sun.nio.cs.ext.ISO2022_CN;
+
+import java.io.*;
 import java.math.BigInteger;
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
-import java.net.InetAddress;
+import java.net.*;
 import java.util.Arrays;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.FileHandler;
@@ -14,7 +12,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class Server {
-    private static DatagramSocket socket;
+    private static ServerSocket socket;
+    private static Socket accept;
     private static final int WAITING_CONNECTION = 0;
     private static final int ABOUT_TO_CONNECT = 1;
     private static final int DATA_RECEIVE = 2;
@@ -27,7 +26,7 @@ public class Server {
     private static final Logger LOGGER = Logger.getLogger(Server.class.getName());
 
     public Server(int port) throws Exception{
-        socket = new DatagramSocket(port);
+        socket = new ServerSocket(port);
         ConsoleHandler consoleHandler = new ConsoleHandler();
         FileHandler fileHandler = new FileHandler(Server.class.getName()+".txt");
         consoleHandler.setLevel(Level.INFO);
@@ -37,266 +36,242 @@ public class Server {
         LOGGER.addHandler(consoleHandler);
         LOGGER.addHandler(fileHandler);
         LOGGER.setUseParentHandlers(false);
+        tcp_con.start();
         LOGGER.log(Level.INFO, "<Servidor> INICIA SERVIDOR. Listo para escuchar al cliente.");
-        tcpListen.start();
     }
-
-    public static Thread tcpListen = new Thread(new Runnable() {
+    private static final Thread tcp_con = new Thread(new Runnable() {
         @Override
         public void run() {
-            DatagramPacket clientDatagram = null;
-            String ucs = "";
-            //Contador de data que ha llegado
-            int cont = 0;
-            String mensaje = "";
-            StringBuilder fileHex = new StringBuilder();
-            while (true) {
-                //Buffer de tamaño 1480 para recibir el encabezado + payload
-                byte[] buffer = new byte[1480];
-                //Se crea un datagram packet que escuche y reciba el paquete del cliente
-                clientDatagram = new DatagramPacket(buffer, buffer.length);
+            try {
+                accept = socket.accept();
+                //Utilizado para recibir el input del cliente
+                DataInputStream dis = new DataInputStream(accept.getInputStream());
+                //Contador de data que ha llegado
+                int cont = 0;
+                //Guarda el string que manda el client
+                String mensaje = "";
+                StringBuilder fileHex = new StringBuilder();
 
-                //Se recibe los datos enviados por el cliente
-                try {
-                    socket.receive(clientDatagram);
-                } catch (IOException e) {
-                    LOGGER.log(Level.SEVERE, "No se pudo recibir el paquete. " + e.getMessage());
-                }
-                //mensaje = new String(buffer, StandardCharsets.US_ASCII);
-                mensaje = new String(clientDatagram.getData(), 0, clientDatagram.getLength());
-                ucs = mensaje.toUpperCase();
-                //Se construye el paquete del cliente
-                PacketSC psc = PacketSC.buildPacket(ucs);
+                while (true) {
+                    //String para que se lea el paquete del cliente
+                    String readClient = dis.readUTF();
+                    mensaje = readClient.toUpperCase();
+                    //Se construye el paquete del cliente
+                    PacketSC psc = PacketSC.buildPacket(mensaje);
+                    //Se suman los campos de paquete recibido para verificar checksum
+                    String sumFields = fieldAdd(psc.SOURCE_PORT, psc.DESTINATION_PORT,
+                            psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG, psc.FYN_FLAG + psc.WINDOW_SIZE);
+                    //Si es verdadero, significa que el checksum esta correcto
+                    //(i.e. todos los bits de la suma de los campos y el checksum son 1)
+                    boolean correctChecksum = verifyChecksum(sumFields, psc.CHECKSUM);
+                    //Se obtiene el numero de sequencia
+                    currentSeqN = psc.SEQ_NUM;
+                    //Se obtiene el ultimo ack number que tiene el cliente
+                    currentAck = psc.ACK_NUM;
+                    //Si no está bien el checksum se bota el paquete
+                    if (!correctChecksum)
+                        continue;
 
-                //Se suman los campos de paquete recibido para verificar checksum
-                String sumFields = fieldAdd(psc.SOURCE_PORT, psc.DESTINATION_PORT,
-                        psc.SEQ_NUM+psc.ACK_NUM, psc.ACK_FLAG+psc.SYN_FLAG,psc.FYN_FLAG+psc.WINDOW_SIZE);
-                //Si es verdadero, significa que el checksum esta correcto
-                //(i.e. todos los bits de la suma de los campos y el checksum son 1)
-                boolean correctChecksum = verifyChecksum(sumFields, psc.CHECKSUM);
-                //Se obtiene el numero de sequencia
-                currentSeqN = psc.SEQ_NUM;
-                //Se obtiene el ultimo ack number que tiene el cliente
-                currentAck = psc.ACK_NUM;
-                //Si no está bien el checksum se bota el paquete
-                if(!correctChecksum)
-                    continue;
-
-                if(SERVER_STATE == WAITING_CONNECTION){
-                    //Se verifica que realmente sea el primer mensaje
-                    if(psc.SEQ_NUM.equals("30") && psc.ACK_NUM.equals("30")
-                       && psc.SYN_FLAG.equals("31")){
-                        PacketSC firstAckPack = new PacketSC();
-                        //Source port mis inciales FS
-                        firstAckPack.setSOURCE_PORT("4653");
-                        firstAckPack.setDESTINATION_PORT(psc.SOURCE_PORT);
-                        firstAckPack.setSEQ_NUM("30");
-                        firstAckPack.setACK_NUM("30");
-                        firstAckPack.setACK_FLAG("31");
-                        firstAckPack.setSYN_FLAG("31");
-                        firstAckPack.setFYN_FLAG("30");
-                        firstAckPack.setWINDOW_SIZE("31");
-                        //Se realiza el checksum del paquete a enviar
-                        String chsm = checksumComputation(firstAckPack.SOURCE_PORT,
-                                firstAckPack.DESTINATION_PORT,
-                                firstAckPack.SEQ_NUM+firstAckPack.ACK_NUM,
-                                firstAckPack.ACK_FLAG+firstAckPack.SYN_FLAG,
-                                firstAckPack.FYN_FLAG+firstAckPack.WINDOW_SIZE);
-                        firstAckPack.setCHECKSUM(chsm);
-                        //Se envían los datos
-                        sendData(firstAckPack.packetHEX(), clientDatagram.getAddress(), clientDatagram.getPort());
-                        SERVER_STATE = ABOUT_TO_CONNECT;
-                        LOGGER.log(Level.INFO, "<Servidor> 3-Way Handshake: 2/3. Se envió el paquete de la siguiente forma: \n" +
-                                "Source Port: " + firstAckPack.SOURCE_PORT + "\nDestination Port: " +
-                                firstAckPack.DESTINATION_PORT +"\nSequence Number: " +
-                                firstAckPack.SEQ_NUM + "\nACK Number: "+ firstAckPack.ACK_NUM +
-                                "\nACK Flag: " + firstAckPack.ACK_FLAG + "\nSYN Flag: " + firstAckPack.SYN_FLAG +
-                                "\nFYN Flag: " + firstAckPack.FYN_FLAG + "\n Window Size: " + firstAckPack.WINDOW_SIZE +
-                                "\nChecksum: " + firstAckPack.CHECKSUM);
-                    }
-                }
-                //Esperando el tercer mensaje del 3WH
-                else if(SERVER_STATE == ABOUT_TO_CONNECT) {
-                    //Se verifica que se esté enviando el ack del primer mensaje
-                    if (psc.ACK_FLAG.equals("31") && psc.ACK_NUM.equals("30") &&
-                            psc.SEQ_NUM.equals("31") && psc.SYN_FLAG.equals("30")){
-                        PacketSC secondAckPack = new PacketSC();
-                        //Source port mis inciales FS
-                        secondAckPack.setSOURCE_PORT("4653");
-                        secondAckPack.setDESTINATION_PORT(psc.SOURCE_PORT);
-                        String ackn = (currentAck.equals("30"))?"31":"30";
-                        secondAckPack.setSEQ_NUM(currentSeqN);
-                        secondAckPack.setACK_NUM(ackn);
-                        secondAckPack.setACK_FLAG("31");
-                        secondAckPack.setSYN_FLAG("30");
-                        secondAckPack.setFYN_FLAG("30");
-                        secondAckPack.setWINDOW_SIZE("31");
-                        //Se realiza el checksum del paquete a enviar
-                        String chsm = checksumComputation(secondAckPack.SOURCE_PORT,
-                                secondAckPack.DESTINATION_PORT,
-                                secondAckPack.SEQ_NUM+secondAckPack.ACK_NUM,
-                                secondAckPack.ACK_FLAG+secondAckPack.SYN_FLAG,
-                                secondAckPack.FYN_FLAG+secondAckPack.WINDOW_SIZE);
-                        secondAckPack.setCHECKSUM(chsm);
-                        //Se envían los datos
-                        sendData(secondAckPack.packetHEX(), clientDatagram.getAddress(), clientDatagram.getPort());
-                        SERVER_STATE = DATA_RECEIVE;
-
-                        LOGGER.log(Level.INFO, "<Servidor> DATA TRANSFER. Ultimo ACK, ya se puede empezar " +
-                                "la transferencia de archivos" +
-                                " Se envió el paquete de la siguiente forma: \n" +
-                                "Source Port: " + secondAckPack.SOURCE_PORT + "\nDestination Port: " +
-                                secondAckPack.DESTINATION_PORT +"\nSequence Number: " +
-                                psc.SEQ_NUM + "\nACK Number: "+ secondAckPack.ACK_NUM +
-                                "\nACK Flag: " + secondAckPack.ACK_FLAG + "\nSYN Flag: " + secondAckPack.SYN_FLAG +
-                                "\nFYN Flag: " + secondAckPack.FYN_FLAG + "\n Window Size: " + secondAckPack.WINDOW_SIZE +
-                                "\nChecksum: " + secondAckPack.CHECKSUM);
-                    }
-                }
-                //Fase 2, la conexión ya fue establecida
-                else if (SERVER_STATE == DATA_RECEIVE){
-                    if (psc.ACK_FLAG.equals("31") && psc.SYN_FLAG.equals("30") &&
-                            psc.FYN_FLAG.equals("30")){
-                        if(cont == 0){ //Es el primer data transfer, o sea el file name
-                            //Se almacena el nombre del archivo
-                            file_name = psc.DATA;
-
-                            PacketSC ackPack = new PacketSC();
+                    if (SERVER_STATE == WAITING_CONNECTION) {
+                        //Se verifica que realmente sea el primer mensaje
+                        if (psc.SEQ_NUM.equals("00") && psc.ACK_NUM.equals("00")
+                                && psc.SYN_FLAG.equals("01")) {
+                            PacketSC firstAckPack = new PacketSC();
                             //Source port mis inciales FS
-                            ackPack.setSOURCE_PORT("4653");
-                            ackPack.setDESTINATION_PORT(psc.SOURCE_PORT);
-                            ackPack.setSEQ_NUM(currentSeqN);
-                            String ackn = (currentAck.equals("30"))?"31":"30";
-                            ackPack.setACK_NUM(ackn);
-                            ackPack.setACK_FLAG("31");
-                            ackPack.setSYN_FLAG("30");
-                            ackPack.setFYN_FLAG("30");
-                            ackPack.setWINDOW_SIZE("31");
+                            firstAckPack.setSOURCE_PORT("4653");
+                            firstAckPack.setDESTINATION_PORT(psc.SOURCE_PORT);
+                            firstAckPack.setSEQ_NUM("00");
+                            firstAckPack.setACK_NUM("00");
+                            firstAckPack.setACK_FLAG("01");
+                            firstAckPack.setSYN_FLAG("01");
+                            firstAckPack.setFYN_FLAG("00");
+                            firstAckPack.setWINDOW_SIZE("01");
                             //Se realiza el checksum del paquete a enviar
-                            String chsm = checksumComputation(ackPack.SOURCE_PORT,
-                                    ackPack.DESTINATION_PORT,
-                                    ackPack.SEQ_NUM+ackPack.ACK_NUM,
-                                    ackPack.ACK_FLAG+ackPack.SYN_FLAG,
-                                    ackPack.FYN_FLAG+ackPack.WINDOW_SIZE);
-                            ackPack.setCHECKSUM(chsm);
-                            sendData(ackPack.packetHEX(), clientDatagram.getAddress(), clientDatagram.getPort());
-                            cont++;
-                            LOGGER.log(Level.INFO, "<Servidor> DATA TRANSFER. Se envió el paquete de la siguiente forma: \n" +
-                                    "Source Port: " + ackPack.SOURCE_PORT + "\nDestination Port: " +
-                                    ackPack.DESTINATION_PORT +"\nSequence Number: " +
-                                    ackPack.SEQ_NUM + "\nACK Number: "+ ackPack.ACK_NUM +
-                                    "\nACK Flag: " + ackPack.ACK_FLAG + "\nSYN Flag: " + ackPack.SYN_FLAG +
-                                    "\nFYN Flag: " + ackPack.FYN_FLAG + "\n Window Size: " + ackPack.WINDOW_SIZE +
-                                    "\nChecksum: " + ackPack.CHECKSUM);
-                        }
-                        else{
-                            if(psc.DATA!=null)
-                                fileHex.append(psc.DATA);
-
-                            //System.out.println(psc.DATA);
-
-                            PacketSC ackPack = new PacketSC();
-                            //Source port mis inciales FS
-                            ackPack.setSOURCE_PORT("4653");
-                            ackPack.setDESTINATION_PORT(psc.SOURCE_PORT);
-                            ackPack.setSEQ_NUM(currentSeqN);
-                            String ackn = (currentAck.equals("30"))?"31":"30";
-                            ackPack.setACK_NUM(ackn);
-                            ackPack.setACK_FLAG("31");
-                            ackPack.setSYN_FLAG("30");
-                            ackPack.setFYN_FLAG("30");
-                            ackPack.setWINDOW_SIZE("31");
-                            //Se realiza el checksum del paquete a enviar
-                            String chsm = checksumComputation(ackPack.SOURCE_PORT,
-                                    ackPack.DESTINATION_PORT,
-                                    ackPack.SEQ_NUM+ackPack.ACK_NUM,
-                                    ackPack.ACK_FLAG+ackPack.SYN_FLAG,
-                                    ackPack.FYN_FLAG+ackPack.WINDOW_SIZE);
-                            ackPack.setCHECKSUM(chsm);
-                            sendData(ackPack.packetHEX(), clientDatagram.getAddress(), clientDatagram.getPort());
-                            LOGGER.log(Level.INFO, "<Servidor> DATA TRANSFER. Se envió el paquete de la siguiente forma: \n" +
-                                    "Source Port: " + ackPack.SOURCE_PORT + "\nDestination Port: " +
-                                    ackPack.DESTINATION_PORT +"\nSequence Number: " +
-                                    ackPack.SEQ_NUM + "\nACK Number: "+ ackPack.ACK_NUM +
-                                    "\nACK Flag: " + ackPack.ACK_FLAG + "\nSYN Flag: " + ackPack.SYN_FLAG +
-                                    "\nFYN Flag: " + ackPack.FYN_FLAG + "\n Window Size: " + ackPack.WINDOW_SIZE +
-                                    "\nChecksum: " + ackPack.CHECKSUM);
+                            String chsm = checksumComputation(firstAckPack.SOURCE_PORT,
+                                    firstAckPack.DESTINATION_PORT,
+                                    firstAckPack.SEQ_NUM + firstAckPack.ACK_NUM,
+                                    firstAckPack.ACK_FLAG + firstAckPack.SYN_FLAG,
+                                    firstAckPack.FYN_FLAG + firstAckPack.WINDOW_SIZE);
+                            firstAckPack.setCHECKSUM(chsm);
+                            //Se envían los datos
+                            try {
+                                sendData(firstAckPack.packetHEX());
+                            } catch (IOException e) {
+                                LOGGER.log(Level.SEVERE, "Error al enviar el paquete. " + e.getMessage());
+                            }
+                            SERVER_STATE = DATA_RECEIVE;
+                            LOGGER.log(Level.INFO, "<Servidor> 3-Way Handshake: 2/3. Se envió el paquete de la siguiente forma: \n" +
+                                    "Source Port: " + firstAckPack.SOURCE_PORT + "\nDestination Port: " +
+                                    firstAckPack.DESTINATION_PORT + "\nSequence Number: " +
+                                    firstAckPack.SEQ_NUM + "\nACK Number: " + firstAckPack.ACK_NUM +
+                                    "\nACK Flag: " + firstAckPack.ACK_FLAG + "\nSYN Flag: " + firstAckPack.SYN_FLAG +
+                                    "\nFYN Flag: " + firstAckPack.FYN_FLAG + "\n Window Size: " + firstAckPack.WINDOW_SIZE +
+                                    "\nChecksum: " + firstAckPack.CHECKSUM);
                         }
                     }
-                    else{
-                        if (psc.ACK_FLAG.equals("31") && psc.SYN_FLAG.equals("30") &&
-                                psc.FYN_FLAG.equals("31")){
-                            PacketSC ackPack = new PacketSC();
-                            //Source port mis inciales FS
-                            ackPack.setSOURCE_PORT("4653");
-                            ackPack.setDESTINATION_PORT(psc.SOURCE_PORT);
-                            ackPack.setSEQ_NUM(currentSeqN);
-                            String ackn = (currentAck.equals("30"))?"31":"30";
-                            ackPack.setACK_NUM(ackn);
-                            ackPack.setACK_FLAG("31");
-                            ackPack.setSYN_FLAG("30");
-                            ackPack.setFYN_FLAG("31");
-                            ackPack.setWINDOW_SIZE("31");
-                            //Se realiza el checksum del paquete a enviar
-                            String chsm = checksumComputation(ackPack.SOURCE_PORT,
-                                    ackPack.DESTINATION_PORT,
-                                    ackPack.SEQ_NUM+ackPack.ACK_NUM,
-                                    ackPack.ACK_FLAG+ackPack.SYN_FLAG,
-                                    ackPack.FYN_FLAG+ackPack.WINDOW_SIZE);
-                            ackPack.setCHECKSUM(chsm);
-                            sendData(ackPack.packetHEX(), clientDatagram.getAddress(), clientDatagram.getPort());
-                            SERVER_STATE = END_CONNECTION;
-                            LOGGER.log(Level.INFO, "<Servidor> TERMINATION PHASE. Se envió el paquete de la siguiente forma: \n" +
-                                    "Source Port: " + ackPack.SOURCE_PORT + "\nDestination Port: " +
-                                    ackPack.DESTINATION_PORT +"\nSequence Number: " +
-                                    ackPack.SEQ_NUM + "\nACK Number: "+ ackPack.ACK_NUM +
-                                    "\nACK Flag: " + ackPack.ACK_FLAG + "\nSYN Flag: " + ackPack.SYN_FLAG +
-                                    "\nFYN Flag: " + ackPack.FYN_FLAG + "\n Window Size: " + ackPack.WINDOW_SIZE +
-                                    "\nChecksum: " + ackPack.CHECKSUM);
+                    //Esperando el tercer mensaje del 3WH
+                    else if (SERVER_STATE == ABOUT_TO_CONNECT) {
+                        //Se verifica que se esté enviando el ack del primer mensaje
+                        if (psc.ACK_FLAG.equals("01") && psc.ACK_NUM.equals("00") &&
+                                psc.SEQ_NUM.equals("01") && psc.SYN_FLAG.equals("00")) {
+                            //Solamente se verifica que llegué el último mensaje del 3WH
+                            SERVER_STATE = DATA_RECEIVE;
+                            LOGGER.log(Level.INFO, "<Servidor> DATA TRANSFER. Ultimo ACK, ya se puede empezar " +
+                                    "la transferencia de archivos");
                         }
                     }
-                }
-                //Ultima fase, el cliente termino conexión, se recibe el último ACK del cliente
-                else if(SERVER_STATE == END_CONNECTION){
-                    LOGGER.log(Level.INFO, "<Cliente> TERMINATION PHASE. Se recibió el ultimo mensaje del cliete \n" +
-                            "Source Port: " + psc.SOURCE_PORT + "\nDestination Port: " +
-                            psc.DESTINATION_PORT +"\nSequence Number: " +
-                            psc.SEQ_NUM + "\nACK Number: "+ psc.ACK_NUM +
-                            "\nACK Flag: " + psc.ACK_FLAG + "\nSYN Flag: " + psc.SYN_FLAG +
-                            "\nFYN Flag: " + psc.FYN_FLAG + "\n Window Size: " + psc.WINDOW_SIZE +
-                            "\nChecksum: " + psc.CHECKSUM);
-                    break;
-                }
-            }
-            StringBuilder filenameBuilder = new StringBuilder();
+                    //Fase 2, la conexión ya fue establecida
+                    else if (SERVER_STATE == DATA_RECEIVE) {
+                        if (psc.ACK_FLAG.equals("00") && psc.SYN_FLAG.equals("00") &&
+                                psc.FYN_FLAG.equals("00")) {
+                            if (cont == 0) { //Es el primer data transfer, o sea el file name
+                                //Se almacena el nombre del archivo
+                                file_name = psc.DATA;
 
-            for (int i = 0; i < file_name.length(); i += 2) {
-                try {
-                    String str = file_name.substring(i, i + 2);
-                    filenameBuilder.append((char) Integer.parseInt(str, 16));
+                                PacketSC ackPack = new PacketSC();
+                                //Source port mis inciales FS
+                                ackPack.setSOURCE_PORT("4653");
+                                ackPack.setDESTINATION_PORT(psc.SOURCE_PORT);
+                                ackPack.setSEQ_NUM(currentSeqN);
+                                String ackn = (currentAck.equals("00")) ? "01" : "00";
+                                ackPack.setACK_NUM(ackn);
+                                ackPack.setACK_FLAG("01");
+                                ackPack.setSYN_FLAG("00");
+                                ackPack.setFYN_FLAG("00");
+                                ackPack.setWINDOW_SIZE("01");
+                                //Se realiza el checksum del paquete a enviar
+                                String chsm = checksumComputation(ackPack.SOURCE_PORT,
+                                        ackPack.DESTINATION_PORT,
+                                        ackPack.SEQ_NUM + ackPack.ACK_NUM,
+                                        ackPack.ACK_FLAG + ackPack.SYN_FLAG,
+                                        ackPack.FYN_FLAG + ackPack.WINDOW_SIZE);
+                                ackPack.setCHECKSUM(chsm);
+                                try {
+                                    sendData(ackPack.packetHEX());
+                                } catch (IOException e) {
+                                    LOGGER.log(Level.SEVERE, "Error al enviar el paquete. " + e.getMessage());
+                                }
+                                cont++;
+                                LOGGER.log(Level.INFO, "<Servidor> DATA TRANSFER. Se envió el paquete de la siguiente forma: \n" +
+                                        "Source Port: " + ackPack.SOURCE_PORT + "\nDestination Port: " +
+                                        ackPack.DESTINATION_PORT + "\nSequence Number: " +
+                                        ackPack.SEQ_NUM + "\nACK Number: " + ackPack.ACK_NUM +
+                                        "\nACK Flag: " + ackPack.ACK_FLAG + "\nSYN Flag: " + ackPack.SYN_FLAG +
+                                        "\nFYN Flag: " + ackPack.FYN_FLAG + "\n Window Size: " + ackPack.WINDOW_SIZE +
+                                        "\nChecksum: " + ackPack.CHECKSUM);
+                            } else {
+                                if (psc.DATA != null)
+                                    fileHex.append(psc.DATA);
+
+                                PacketSC ackPack = new PacketSC();
+                                //Source port mis inciales FS
+                                ackPack.setSOURCE_PORT("4653");
+                                ackPack.setDESTINATION_PORT(psc.SOURCE_PORT);
+                                ackPack.setSEQ_NUM(currentSeqN);
+                                String ackn = (currentAck.equals("00")) ? "01" : "00";
+                                ackPack.setACK_NUM(ackn);
+                                ackPack.setACK_FLAG("01");
+                                ackPack.setSYN_FLAG("00");
+                                ackPack.setFYN_FLAG("00");
+                                ackPack.setWINDOW_SIZE("01");
+                                //Se realiza el checksum del paquete a enviar
+                                String chsm = checksumComputation(ackPack.SOURCE_PORT,
+                                        ackPack.DESTINATION_PORT,
+                                        ackPack.SEQ_NUM + ackPack.ACK_NUM,
+                                        ackPack.ACK_FLAG + ackPack.SYN_FLAG,
+                                        ackPack.FYN_FLAG + ackPack.WINDOW_SIZE);
+                                ackPack.setCHECKSUM(chsm);
+                                try {
+                                    sendData(ackPack.packetHEX());
+                                    LOGGER.log(Level.INFO, "Se envió lo siguiente: " + ackPack.packetHEX());
+                                } catch (IOException e) {
+                                    LOGGER.log(Level.SEVERE, "Error al enviar el paquete. " + e.getMessage());
+                                }
+                                LOGGER.log(Level.INFO, "<Servidor> DATA TRANSFER. Se envió el paquete de la siguiente forma: \n" +
+                                        "Source Port: " + ackPack.SOURCE_PORT + "\nDestination Port: " +
+                                        ackPack.DESTINATION_PORT + "\nSequence Number: " +
+                                        ackPack.SEQ_NUM + "\nACK Number: " + ackPack.ACK_NUM +
+                                        "\nACK Flag: " + ackPack.ACK_FLAG + "\nSYN Flag: " + ackPack.SYN_FLAG +
+                                        "\nFYN Flag: " + ackPack.FYN_FLAG + "\n Window Size: " + ackPack.WINDOW_SIZE +
+                                        "\nChecksum: " + ackPack.CHECKSUM);
+                            }
+                        } else {
+                            if (psc.ACK_FLAG.equals("00") && psc.SYN_FLAG.equals("00") &&
+                                    psc.FYN_FLAG.equals("01")) {
+                                PacketSC ackPack = new PacketSC();
+                                //Source port mis inciales FS
+                                ackPack.setSOURCE_PORT("4653");
+                                ackPack.setDESTINATION_PORT(psc.SOURCE_PORT);
+                                ackPack.setSEQ_NUM(currentSeqN);
+                                String ackn = (currentAck.equals("00")) ? "01" : "00";
+                                ackPack.setACK_NUM(ackn);
+                                ackPack.setACK_FLAG("01");
+                                ackPack.setSYN_FLAG("00");
+                                ackPack.setFYN_FLAG("01");
+                                ackPack.setWINDOW_SIZE("01");
+                                //Se realiza el checksum del paquete a enviar
+                                String chsm = checksumComputation(ackPack.SOURCE_PORT,
+                                        ackPack.DESTINATION_PORT,
+                                        ackPack.SEQ_NUM + ackPack.ACK_NUM,
+                                        ackPack.ACK_FLAG + ackPack.SYN_FLAG,
+                                        ackPack.FYN_FLAG + ackPack.WINDOW_SIZE);
+                                ackPack.setCHECKSUM(chsm);
+                                try {
+                                    sendData(ackPack.packetHEX());
+                                } catch (IOException e) {
+                                    LOGGER.log(Level.SEVERE, "Error al enviar el paquete. " + e.getMessage());
+                                }
+                                SERVER_STATE = END_CONNECTION;
+                                LOGGER.log(Level.INFO, "<Servidor> TERMINATION PHASE. Se envió el paquete de la siguiente forma: \n" +
+                                        "Source Port: " + ackPack.SOURCE_PORT + "\nDestination Port: " +
+                                        ackPack.DESTINATION_PORT + "\nSequence Number: " +
+                                        ackPack.SEQ_NUM + "\nACK Number: " + ackPack.ACK_NUM +
+                                        "\nACK Flag: " + ackPack.ACK_FLAG + "\nSYN Flag: " + ackPack.SYN_FLAG +
+                                        "\nFYN Flag: " + ackPack.FYN_FLAG + "\n Window Size: " + ackPack.WINDOW_SIZE +
+                                        "\nChecksum: " + ackPack.CHECKSUM);
+                            }
+                        }
+                    }
+                    //Ultima fase, el cliente termino conexión, se recibe el último ACK del cliente
+                    else if (SERVER_STATE == END_CONNECTION) {
+                        LOGGER.log(Level.INFO, "<Cliente> TERMINATION PHASE. Se recibió el ultimo mensaje del cliete \n" +
+                                "Source Port: " + psc.SOURCE_PORT + "\nDestination Port: " +
+                                psc.DESTINATION_PORT + "\nSequence Number: " +
+                                psc.SEQ_NUM + "\nACK Number: " + psc.ACK_NUM +
+                                "\nACK Flag: " + psc.ACK_FLAG + "\nSYN Flag: " + psc.SYN_FLAG +
+                                "\nFYN Flag: " + psc.FYN_FLAG + "\n Window Size: " + psc.WINDOW_SIZE +
+                                "\nChecksum: " + psc.CHECKSUM);
+                        break;
+                    }
                 }
-                catch (Exception e){
-                    //**Solamente para suprimir el error**
+                StringBuilder filenameBuilder = new StringBuilder();
+
+                for (int i = 0; i < file_name.length(); i += 2) {
+                    try {
+                        String str = file_name.substring(i, i + 2);
+                        filenameBuilder.append((char) Integer.parseInt(str, 16));
+                    } catch (Exception e) {
+                        //**Solamente para suprimir el error**
+                    }
                 }
-            }
                 String NOMBRE_ARCHIVO = filenameBuilder.toString();
                 byte[] fileRealBytes = hexStringToByteArray(fileHex.toString());
                 int contador = fileRealBytes.length - 1;
-                while (contador >= 0 && fileRealBytes[contador] == 0)
-                {
+                while (contador >= 0 && fileRealBytes[contador] == 0) {
                     --contador;
                 }
                 fileRealBytes = Arrays.copyOf(fileRealBytes, contador + 1);
-                File fileDestination = new File("prueba"+NOMBRE_ARCHIVO);
-                try {
-                    convertToFile(fileRealBytes, fileDestination);
-                } catch (Exception e) {
-                    LOGGER.log(Level.SEVERE, "Error al convertir a bytes. " + e.getMessage());
-                }
+                File fileDestination = new File("prueba" + NOMBRE_ARCHIVO);
+                convertToFile(fileRealBytes, fileDestination);
                 socket.close();
-                LOGGER.log(Level.INFO,"<Servidor> Conexion con cliente finalizada");
+                LOGGER.log(Level.INFO, "<Servidor> Conexion con cliente finalizada");
+            } catch (Exception e) {
+                System.out.println("Exception message: " + e);
+            }
         }
     });
+
+
     public static void convertToFile(byte[] data, File destino) throws Exception{
 
         FileOutputStream fos = new FileOutputStream(destino);
@@ -304,11 +279,12 @@ public class Server {
         fos.close();
 
     }
-    private static void sendData(String data, InetAddress ip, int port){
+    private static void sendData(String data) throws IOException {
+        LOGGER.log(Level.INFO, "DATA A ENVIAR!!! " + data);
         //Se crea el packet para enviarse al servidor
-        DatagramPacket dp = new DatagramPacket(data.getBytes(),data.getBytes().length,ip,port);
+        DataOutputStream dos = new DataOutputStream(accept.getOutputStream());
         try{
-            socket.send(dp);
+            dos.writeUTF(data);
         }catch(IOException io){
             LOGGER.log(Level.SEVERE, "No se pudo enviar el paquete. " + io.getMessage());
         }
