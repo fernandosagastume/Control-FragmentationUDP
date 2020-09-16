@@ -58,12 +58,41 @@ public class Server {
                     mensaje = readClient.toUpperCase();
                     //Se construye el paquete del cliente
                     PacketSC psc = PacketSC.buildPacket(mensaje);
-                    //Se suman los campos de paquete recibido para verificar checksum
-                    String sumFields = fieldAdd(psc.SOURCE_PORT, psc.DESTINATION_PORT,
-                            psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG, psc.FYN_FLAG + psc.WINDOW_SIZE);
-                    //Si es verdadero, significa que el checksum esta correcto
-                    //(i.e. todos los bits de la suma de los campos y el checksum son 1)
-                    boolean correctChecksum = verifyChecksum(sumFields, psc.CHECKSUM);
+                    if(!psc.packetHEX().equals(""))
+                        LOGGER.log(Level.INFO, "<Client>" + "Server State:  " + SERVER_STATE + " Mensaje del cliente: \n" +
+                                "Source Port: " + psc.SOURCE_PORT + "\nDestination Port: " +
+                                psc.DESTINATION_PORT + "\nSequence Number: " +
+                                psc.SEQ_NUM + "\nACK Number: " + psc.ACK_NUM +
+                                "\nACK Flag: " + psc.ACK_FLAG + "\nSYN Flag: " + psc.SYN_FLAG +
+                                "\nFYN Flag: " + psc.FYN_FLAG + "\n Window Size: " + psc.WINDOW_SIZE +
+                                "\nChecksum: " + psc.CHECKSUM + "\n DATA: " + psc.DATA);
+
+                    boolean correctChecksum;
+                    if(SERVER_STATE == WAITING_CONNECTION || SERVER_STATE == ABOUT_TO_CONNECT ||
+                         SERVER_STATE == END_CONNECTION || psc.FYN_FLAG.equals("01")){
+                        //Se suman los campos de paquete recibido para verificar checksum
+                        String sumFields = fieldAdd(psc.SOURCE_PORT, psc.DESTINATION_PORT,
+                                psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG,
+                                psc.FYN_FLAG + psc.WINDOW_SIZE);
+                        //Si es verdadero, significa que el checksum esta correcto
+                        //(i.e. todos los bits de la suma de los campos y el checksum son 1)
+                        correctChecksum = verifyChecksum(sumFields, psc.CHECKSUM);
+                    }
+                    else{ //CASO: DATA RECEIVE
+                        String sumas = fieldAdd(psc.SOURCE_PORT, psc.DESTINATION_PORT,
+                                psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG,
+                                psc.FYN_FLAG + psc.WINDOW_SIZE);
+                        //Se parte la data en chunks de 16 bits
+                        String [] arr = (psc.DATA).split("(?<=\\G.{4})");
+
+                        //Se suman los campos con los chunks de la data
+                        for (int i = 0; i < arr.length; i++) {
+                            sumas = binaryAdd(sumas, hexToBinary(arr[i]));
+                        }
+                        //Si es verdadero, significa que el checksum esta correcto
+                        //(i.e. todos los bits de la suma de los campos y el checksum son 1)
+                        correctChecksum = verifyChecksum(sumas, psc.CHECKSUM);
+                    }
                     //Se obtiene el numero de sequencia
                     currentSeqN = psc.SEQ_NUM;
                     //Se obtiene el ultimo ack number que tiene el cliente
@@ -99,7 +128,7 @@ public class Server {
                             } catch (IOException e) {
                                 LOGGER.log(Level.SEVERE, "Error al enviar el paquete. " + e.getMessage());
                             }
-                            SERVER_STATE = DATA_RECEIVE;
+                            SERVER_STATE = ABOUT_TO_CONNECT;
                             LOGGER.log(Level.INFO, "<Servidor> 3-Way Handshake: 2/3. Se envió el paquete de la siguiente forma: \n" +
                                     "Source Port: " + firstAckPack.SOURCE_PORT + "\nDestination Port: " +
                                     firstAckPack.DESTINATION_PORT + "\nSequence Number: " +
@@ -280,7 +309,6 @@ public class Server {
 
     }
     private static void sendData(String data) throws IOException {
-        LOGGER.log(Level.INFO, "DATA A ENVIAR!!! " + data);
         //Se crea el packet para enviarse al servidor
         DataOutputStream dos = new DataOutputStream(accept.getOutputStream());
         try{
@@ -326,7 +354,28 @@ public class Server {
 
 
     public static String hexToBinary(String hex){
+
         return completeZeros((new BigInteger(hex, 16)).toString(2));
+    }
+
+    //Devuelve el CHECKSUM tomando en cuenta la data
+    public static String checksumComputationWithData(String hex1, String hex2, String hex3,
+                                                     String hex4, String hex5, String datos){
+        //Se hace la suma de los campos junto con la suma del carry out
+        String sumas = fieldAdd(hex1,hex2,hex3,hex4,hex5);
+        //Se parte la data en chunks de 16 bits
+        String [] arr = datos.split("(?<=\\G.{4})");
+
+        //Se suman los campos con los chunks de la data
+        for (int i = 0; i < arr.length; i++) {
+            sumas = binaryAdd(sumas, hexToBinary(arr[i]));
+        }
+
+        //Se le saca el complemento a 1
+        String checksumRes = complement1(sumas);
+        //Se convierte a hex
+        checksumRes = Integer.toString(Integer.parseInt(checksumRes,2),16).toUpperCase();
+        return checksumRes;
     }
 
     //Devuelve el binario

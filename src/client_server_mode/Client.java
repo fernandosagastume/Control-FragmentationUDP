@@ -21,7 +21,7 @@ public class Client {
     private static Socket mySocket;
     private static int TCPCon_phase = 0;
     private String sourcePort;
-    private String destinationPort;
+    private static String destinationPort;
     private static String FILE_NAME;
     public static int port;
     public static InetAddress ip;
@@ -86,36 +86,54 @@ public class Client {
                 //Para recibir el input del server socket
                 DataInputStream dis = new DataInputStream(mySocket.getInputStream());
                 int cont = 0;
-                boolean firstData = true;
+                //Boolean que determina si se está enviando el ultimo fragmento
                 boolean lastPieceOfData = false;
+                //Boolean que determina si ya se puede acabar la conexión
                 boolean okToEndConn = false;
                 File file = new File(FILE_NAME);
+                //Se convierte el archivo que se desea enviar en bytes
                 byte[] filetoBytes = convertFileToBytes(file);
+                //ArrayList para guardar la data fragmentada
                 ArrayList<byte[]> fragmentedBytes = new ArrayList<>();
                 int payload_length = 1460;
                 //Se divide en 2 para que se puedan mandar bien los strings
                 splitByteArray(fragmentedBytes, filetoBytes, payload_length/2);
                 boolean endConnComplete = false;
                 while (true) {
-                    //Se guarda el header recibido
-                    String headerRCV = dis.readUTF();
-                    //Se obtiene la data y se guarda en un objeto PacketSC
-                    PacketSC psc = PacketSC.buildPacket(headerRCV);
-                    //Se suman los campos de paquete recibido para verificar checksum
-                    String sumFields = fieldAdd(psc.SOURCE_PORT, psc.DESTINATION_PORT,
-                            psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG, psc.FYN_FLAG + psc.WINDOW_SIZE);
-                    //Si es verdadero, significa que el checksum esta correcto (i.e. todos los bits son 1)
-                    boolean correctChecksum = verifyChecksum(sumFields, psc.CHECKSUM);
-                    String theCorrectOne = checksumComputation(psc.SOURCE_PORT, psc.DESTINATION_PORT,
-                            psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG, psc.FYN_FLAG + psc.WINDOW_SIZE);
-                    //Si no está bien el checksum se bota el paquete
-                    if (!correctChecksum) {
-                        LOGGER.log(Level.SEVERE, "Checksum incorrecto: " + psc.CHECKSUM + "\n el correcto " +
-                                "deberia de ser: " + theCorrectOne);
-                        continue;
-                    }
-                    if (lastPieceOfData) {
-                        okToEndConn = true;
+                    PacketSC psc = new PacketSC();
+                    if(TCPCon_phase!=2) {
+                        //Se guarda el header recibido
+                        String headerRCV = dis.readUTF();
+                        //Se obtiene la data y se guarda en un objeto PacketSC
+                        psc = PacketSC.buildPacket(headerRCV);
+                        if(!psc.packetHEX().equals(""))
+                            LOGGER.log(Level.INFO, "<Server>" + "Fase: " + TCPCon_phase + " Mensaje del cliente: \n" +
+                                    "Source Port: " + psc.SOURCE_PORT + "\nDestination Port: " +
+                                    psc.DESTINATION_PORT + "\nSequence Number: " +
+                                    psc.SEQ_NUM + "\nACK Number: " + psc.ACK_NUM +
+                                    "\nACK Flag: " + psc.ACK_FLAG + "\nSYN Flag: " + psc.SYN_FLAG +
+                                    "\nFYN Flag: " + psc.FYN_FLAG + "\n Window Size: " + psc.WINDOW_SIZE +
+                                    "\nChecksum: " + psc.CHECKSUM + "\n DATA: " + psc.DATA);
+                        //Se suman los campos de paquete recibido para verificar checksum
+                        String sumFields = fieldAdd(psc.SOURCE_PORT, psc.DESTINATION_PORT,
+                                psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG, psc.FYN_FLAG + psc.WINDOW_SIZE);
+                        //Si es verdadero, significa que el checksum esta correcto (i.e. todos los bits son 1)
+                        boolean correctChecksum = verifyChecksum(sumFields, psc.CHECKSUM);
+                        String theCorrectOne = checksumComputation(psc.SOURCE_PORT, psc.DESTINATION_PORT,
+                                psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG, psc.FYN_FLAG + psc.WINDOW_SIZE);
+                        while(theCorrectOne.length() != 4){
+                            theCorrectOne = "0" + theCorrectOne;
+                        }
+                        //Si no está bien el checksum se bota el paquete
+                        if (!correctChecksum) {
+                            LOGGER.log(Level.SEVERE, "Checksum incorrecto: " + psc.CHECKSUM + "\n el correcto " +
+                                    "deberia de ser: " + theCorrectOne);
+                            continue;
+                        }
+                        //Si ya se envió ya data, ya se puede empezar la termination phase
+                        if (lastPieceOfData) {
+                            okToEndConn = true;
+                        }
                     }
                     //Connection Establishment Phase
                     if (TCPCon_phase == 1) {
@@ -138,45 +156,59 @@ public class Client {
                                     send_packet_ack.ACK_FLAG + send_packet_ack.SYN_FLAG,
                                     send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE);
                             send_packet_ack.setCHECKSUM(chsm);
+                            while(chsm.length() != 4){
+                                chsm = "0" + chsm;
+                            }
                             sendData(send_packet_ack.packetHEX());
-                            LOGGER.log(Level.INFO, "Se envió lo siguiente FASE 1: " + send_packet_ack.packetHEX());
+                            LOGGER.log(Level.INFO, "<Cliente> Se envió lo siguiente FASE 1: " + send_packet_ack.packetHEX());
                             currentSeqNum = send_packet_ack.SEQ_NUM;
                             currentAckNum = send_packet_ack.ACK_NUM;
+                            destinationPort = psc.SOURCE_PORT;
                             currentPacket = send_packet_ack;
                             TCPCon_phase = 2;
-                            //De una vez se manda el mensaje con el nombre del archivo
-                            String fragmentN = "";
-                            byte[] bt = FILE_NAME.getBytes();
-                            for (byte b : bt) {
-                                //Se convierte el nombre del archivo en hex
-                                fragmentN += String.format("%02x", b).toUpperCase();
-                            }
-                            LOGGER.log(Level.INFO, "<Cliente> DATA TRANSFER. Inicio de la trasferencia de archivos.");
-                            PacketSC packetName = new PacketSC();
-                            String seqN = (currentSeqNum.equals("00")) ? "01" : "00";
-                            packetName.setSOURCE_PORT("4653");
-                            packetName.setDESTINATION_PORT(psc.SOURCE_PORT);
-                            packetName.setSEQ_NUM(seqN);
-                            packetName.setACK_NUM(psc.ACK_NUM);
-                            packetName.setACK_FLAG("00");
-                            packetName.setSYN_FLAG("00");
-                            packetName.setFYN_FLAG("00");
-                            packetName.setWINDOW_SIZE("01");
-                            //Se realiza el checksum del paquete a enviar
-                            String chsmName = checksumComputation(packetName.SOURCE_PORT,
-                                    packetName.DESTINATION_PORT,
-                                    packetName.SEQ_NUM + packetName.ACK_NUM,
-                                    packetName.ACK_FLAG + packetName.SYN_FLAG,
-                                    packetName.FYN_FLAG + packetName.WINDOW_SIZE);
-                            packetName.setCHECKSUM(chsmName);
-                            packetName.setDATA(fragmentN);
-                            currentSeqNum = packetName.SEQ_NUM;
-                            currentAckNum = packetName.ACK_NUM;
-                            sendData(packetName.packetHEX());
+
                         }
                     }
+                    else if (TCPCon_phase == 2){
+                        //De una vez se manda el mensaje con el nombre del archivo
+                        String fragmentN = "";
+                        byte[] bt = FILE_NAME.getBytes();
+                        for (byte b : bt) {
+                            //Se convierte el nombre del archivo en hex
+                            fragmentN += String.format("%02x", b).toUpperCase();
+                        }
+                        PacketSC packetName = new PacketSC();
+                        String seqN = (currentSeqNum.equals("00")) ? "01" : "00";
+                        packetName.setSOURCE_PORT("4653");
+                        packetName.setDESTINATION_PORT(destinationPort);
+                        packetName.setSEQ_NUM(seqN);
+                        packetName.setACK_NUM(currentAckNum);
+                        packetName.setACK_FLAG("00");
+                        packetName.setSYN_FLAG("00");
+                        packetName.setFYN_FLAG("00");
+                        packetName.setWINDOW_SIZE("01");
+                        packetName.setDATA(fragmentN);
+                        //Se realiza el checksum del paquete a enviar
+                        String chsmName = checksumComputationWithData(packetName.SOURCE_PORT,
+                                packetName.DESTINATION_PORT,
+                                packetName.SEQ_NUM + packetName.ACK_NUM,
+                                packetName.ACK_FLAG + packetName.SYN_FLAG,
+                                packetName.FYN_FLAG + packetName.WINDOW_SIZE,
+                                packetName.DATA);
+                        while(chsmName.length() != 4){
+                            chsmName = "0" + chsmName;
+                        }
+                        packetName.setCHECKSUM(chsmName);
+                        currentSeqNum = packetName.SEQ_NUM;
+                        currentAckNum = packetName.ACK_NUM;
+                        currentPacket = packetName;
+                        sendData(packetName.packetHEX());
+
+                        LOGGER.log(Level.INFO, "<Cliente> DATA TRANSFER. Inicio de la trasferencia de archivos.");
+                        TCPCon_phase = 3;
+                    }
                     //Data Transfer Phase
-                    else if (TCPCon_phase == 2) {
+                    else if (TCPCon_phase == 3) {
                         if (okToEndConn) {//Si ya se envió el último pedazo de data, finalizar conexión
                             PacketSC send_packet_ack = new PacketSC();
                             String seqN = (currentSeqNum.equals("00")) ? "01" : "00";
@@ -194,10 +226,21 @@ public class Client {
                                     send_packet_ack.SEQ_NUM + send_packet_ack.ACK_NUM,
                                     send_packet_ack.ACK_FLAG + send_packet_ack.SYN_FLAG,
                                     send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE);
+                            while(chsm.length() != 4){
+                                chsm = "0" + chsm;
+                            }
                             send_packet_ack.setCHECKSUM(chsm);
                             sendData(send_packet_ack.packetHEX());
                             currentPacket = send_packet_ack;
-                            TCPCon_phase = 3;
+                            TCPCon_phase = 4;
+                            LOGGER.log(Level.INFO, "<Cliente>" + "Fase " + TCPCon_phase + " Mensaje del cliente: \n" +
+                                    "Source Port: " + currentPacket.SOURCE_PORT + "\nDestination Port: " +
+                                    currentPacket.DESTINATION_PORT + "\nSequence Number: " +
+                                    currentPacket.SEQ_NUM + "\nACK Number: " + currentPacket.ACK_NUM +
+                                    "\nACK Flag: " + currentPacket.ACK_FLAG + "\nSYN Flag: " + currentPacket.SYN_FLAG +
+                                    "\nFYN Flag: " + currentPacket.FYN_FLAG + "\n Window Size: " + currentPacket.WINDOW_SIZE +
+                                    "\nChecksum: " + currentPacket.CHECKSUM + "\n DATA: " + currentPacket.DATA);
+                            continue;
                         } else {
                             if (psc.ACK_FLAG.equals("01") && psc.SYN_FLAG.equals("00") &&
                                     psc.FYN_FLAG.equals("00")) {
@@ -219,17 +262,29 @@ public class Client {
                                     send_packet_ack.setSYN_FLAG("00");
                                     send_packet_ack.setFYN_FLAG("00");
                                     send_packet_ack.setWINDOW_SIZE("01");
+                                    send_packet_ack.setDATA(fragmentN);
                                     //Se realiza el checksum del paquete a enviar
-                                    String chsm = checksumComputation(send_packet_ack.SOURCE_PORT,
+                                    String chsm = checksumComputationWithData(send_packet_ack.SOURCE_PORT,
                                             send_packet_ack.DESTINATION_PORT,
                                             send_packet_ack.SEQ_NUM + send_packet_ack.ACK_NUM,
                                             send_packet_ack.ACK_FLAG + send_packet_ack.SYN_FLAG,
-                                            send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE);
+                                            send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE,
+                                             send_packet_ack.DATA);
+                                    while(chsm.length() != 4){
+                                        chsm = "0" + chsm;
+                                    }
                                     send_packet_ack.setCHECKSUM(chsm);
-                                    send_packet_ack.setDATA(fragmentN);
                                     currentSeqNum = send_packet_ack.SEQ_NUM;
                                     currentAckNum = send_packet_ack.ACK_NUM;
+                                    currentPacket = send_packet_ack;
                                     sendData(send_packet_ack.packetHEX());
+                                    LOGGER.log(Level.INFO, "<Cliente>" + "Fase " + TCPCon_phase + " Mensaje del cliente: \n" +
+                                            "Source Port: " + currentPacket.SOURCE_PORT + "\nDestination Port: " +
+                                            currentPacket.DESTINATION_PORT + "\nSequence Number: " +
+                                            currentPacket.SEQ_NUM + "\nACK Number: " + currentPacket.ACK_NUM +
+                                            "\nACK Flag: " + currentPacket.ACK_FLAG + "\nSYN Flag: " + currentPacket.SYN_FLAG +
+                                            "\nFYN Flag: " + currentPacket.FYN_FLAG + "\n Window Size: " + currentPacket.WINDOW_SIZE +
+                                            "\nChecksum: " + currentPacket.CHECKSUM + "\n DATA: " + currentPacket.DATA);
                                     lastPieceOfData = true;
                                     continue;
                                     }
@@ -262,14 +317,18 @@ public class Client {
                                 send_packet_ack.setSYN_FLAG("00");
                                 send_packet_ack.setFYN_FLAG("00");
                                 send_packet_ack.setWINDOW_SIZE("01");
+                                send_packet_ack.setDATA(fragmentN);
                                 //Se realiza el checksum del paquete a enviar
-                                String chsm = checksumComputation(send_packet_ack.SOURCE_PORT,
+                                String chsm = checksumComputationWithData(send_packet_ack.SOURCE_PORT,
                                         send_packet_ack.DESTINATION_PORT,
                                         send_packet_ack.SEQ_NUM + send_packet_ack.ACK_NUM,
                                         send_packet_ack.ACK_FLAG + send_packet_ack.SYN_FLAG,
-                                        send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE);
+                                        send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE,
+                                         send_packet_ack.DATA);
+                                while(chsm.length() != 4){
+                                    chsm = "0" + chsm;
+                                }
                                 send_packet_ack.setCHECKSUM(chsm);
-                                send_packet_ack.setDATA(fragmentN);
                                 currentSeqNum = send_packet_ack.SEQ_NUM;
                                 currentAckNum = send_packet_ack.ACK_NUM;
                                 sendData(send_packet_ack.packetHEX());
@@ -278,7 +337,7 @@ public class Client {
                         }
                     }
                     //Connection Termination Phase
-                    else if (TCPCon_phase == 3) { //Se acaba la conexión, se manda un último ACK
+                    else if (TCPCon_phase == 4) { //Se acaba la conexión, se manda un último ACK
                         PacketSC send_packet_ack = new PacketSC();
                         String seqN = (currentSeqNum.equals("00")) ? "01" : "00";
                         send_packet_ack.setSOURCE_PORT("4653");
@@ -295,6 +354,9 @@ public class Client {
                                 send_packet_ack.SEQ_NUM + send_packet_ack.ACK_NUM,
                                 send_packet_ack.ACK_FLAG + send_packet_ack.SYN_FLAG,
                                 send_packet_ack.FYN_FLAG + send_packet_ack.WINDOW_SIZE);
+                        while(chsm.length() != 4){
+                            chsm = "0" + chsm;
+                        }
                         send_packet_ack.setCHECKSUM(chsm);
                         sendData(send_packet_ack.packetHEX());
                         currentPacket = send_packet_ack;
@@ -306,7 +368,7 @@ public class Client {
                             currentPacket.SEQ_NUM + "\nACK Number: " + currentPacket.ACK_NUM +
                             "\nACK Flag: " + currentPacket.ACK_FLAG + "\nSYN Flag: " + currentPacket.SYN_FLAG +
                             "\nFYN Flag: " + currentPacket.FYN_FLAG + "\n Window Size: " + currentPacket.WINDOW_SIZE +
-                            "\nChecksum: " + currentPacket.CHECKSUM);
+                            "\nChecksum: " + currentPacket.CHECKSUM + "\n DATA: " + currentPacket.DATA);
                 }
 
                 mySocket.close();
@@ -391,7 +453,27 @@ public class Client {
         return completeZeros((new BigInteger(hex, 16)).toString(2));
     }
 
-    //Devuelve el binario
+    //Devuelve el CHECKSUM tomando en cuenta la data
+    public static String checksumComputationWithData(String hex1, String hex2, String hex3,
+                                             String hex4, String hex5, String datos){
+        //Se hace la suma de los campos junto con la suma del carry out
+        String sumas = fieldAdd(hex1,hex2,hex3,hex4,hex5);
+        //Se parte la data en chunks de 16 bits
+        String [] arr = datos.split("(?<=\\G.{4})");
+
+        //Se suman los campos con los chunks de la data
+        for (int i = 0; i < arr.length; i++) {
+            sumas = binaryAdd(sumas, hexToBinary(arr[i]));
+        }
+
+        //Se le saca el complemento a 1
+        String checksumRes = complement1(sumas);
+        //Se convierte a hex
+        checksumRes = Integer.toString(Integer.parseInt(checksumRes,2),16).toUpperCase();
+        return checksumRes;
+    }
+
+    //Devuelve el CHECKSUM
     public static String checksumComputation(String hex1, String hex2, String hex3,
                                              String hex4, String hex5){
         //Se hace la suma de los campos junto con la suma del carry out
