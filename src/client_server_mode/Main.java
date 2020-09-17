@@ -38,14 +38,15 @@ public class Main {
                         LOGGER.addHandler(consoleHandler);
                         LOGGER.addHandler(fileHandler);
                         LOGGER.setUseParentHandlers(false);
-                        System.out.print("Por favor ingresa numero del puerto para el server: ");
+                        /*System.out.print("Por favor ingresa numero del puerto para el server: ");
                         pn = br.readLine();
                         System.out.print("Por favor direccion ip para el server: ");
                         ipA = br2.readLine();
-                        port = Integer.parseInt(pn);
+                        port = Integer.parseInt(pn);*/
                         System.out.print("Por favor ingrese el nombre del archivo que desea enviar: ");
                         fileName = br3.readLine();
-                        c = new Client(port, InetAddress.getByName(ipA), fileName);
+                        //c = new Client(port, InetAddress.getByName(ipA), fileName);
+                        c = new Client(13849, "13.59.15.185", fileName);
                         LOGGER.log(Level.INFO, "Se inicio el programa como modo CLIENTE");
                         break;
             case "servidor":
@@ -96,12 +97,13 @@ public class Main {
                     LOGGER.setUseParentHandlers(false);
                     System.out.print("Por favor ingresa numero del puerto para el server: ");
                     pn = br.readLine();
-                    System.out.print("Por favor direccion ip para el server: ");
-                    ipA = br2.readLine();
+                    //System.out.print("Por favor direccion ip para el server: ");
+                    //ipA = br2.readLine();
                     port = Integer.parseInt(pn);
                     System.out.print("Por favor ingrese el nombre del archivo que desea enviar: ");
                     fileName = br3.readLine();
-                    c = new Client(port, InetAddress.getLocalHost(), fileName);
+                    //c = new Client(6666, "127.0.0.1", fileName);
+                    c = new Client(port, "127.0.0.1", fileName);
                     LOGGER.log(Level.INFO, "Se inicio el programa como modo CLIENTE");
                     break;
             default:

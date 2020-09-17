@@ -24,14 +24,14 @@ public class Client {
     private static String destinationPort;
     private static String FILE_NAME;
     public static int port;
-    public static InetAddress ip;
+    public static String ip;
     public static String currentSeqNum;
     public static String currentAckNum;
     private static final Logger LOGGER = Logger.getLogger(Client.class.getName());
     private static PacketSC currentPacket;
     private static DataInputStream dis;
 
-    public Client(int port, InetAddress ip, String fileName) throws Exception{
+    public Client(int port, String ip, String fileName) throws Exception{
         this.port = port;
         this.ip = ip;
         this.FILE_NAME = fileName;
@@ -99,11 +99,18 @@ public class Client {
                 //Se divide en 2 para que se puedan mandar bien los strings
                 splitByteArray(fragmentedBytes, filetoBytes, payload_length/2);
                 boolean endConnComplete = false;
+                byte[] buffer = new byte[1460];
                 while (true) {
                     PacketSC psc = new PacketSC();
                     if(TCPCon_phase!=2) {
                         //Se guarda el header recibido
-                        String headerRCV = dis.readUTF();
+                        dis.read(buffer);
+                        final StringBuilder builderh = new StringBuilder();
+                        for(byte b : buffer) {
+                            builderh.append(String.format("%02x", b));
+                        }
+
+                        String headerRCV = (builderh.toString()).toUpperCase();
                         //Se obtiene la data y se guarda en un objeto PacketSC
                         psc = PacketSC.buildPacket(headerRCV);
                         if(!psc.packetHEX().equals(""))
@@ -113,7 +120,8 @@ public class Client {
                                     psc.SEQ_NUM + "\nACK Number: " + psc.ACK_NUM +
                                     "\nACK Flag: " + psc.ACK_FLAG + "\nSYN Flag: " + psc.SYN_FLAG +
                                     "\nFYN Flag: " + psc.FYN_FLAG + "\n Window Size: " + psc.WINDOW_SIZE +
-                                    "\nChecksum: " + psc.CHECKSUM + "\n DATA: " + psc.DATA);
+                                    "\nChecksum: " + psc.CHECKSUM);
+
                         //Se suman los campos de paquete recibido para verificar checksum
                         String sumFields = fieldAdd(psc.SOURCE_PORT, psc.DESTINATION_PORT,
                                 psc.SEQ_NUM + psc.ACK_NUM, psc.ACK_FLAG + psc.SYN_FLAG, psc.FYN_FLAG + psc.WINDOW_SIZE);
@@ -384,10 +392,11 @@ public class Client {
 
     // Función para enviar data al servidor
     private static void sendData(String data) throws IOException {
+        byte[] decoded = new BigInteger(data, 16).toByteArray();
         //Se crea el packet para enviarse al servidor
         DataOutputStream dos = new DataOutputStream(mySocket.getOutputStream());
         try{
-            dos.writeUTF(data);
+            dos.write(decoded);
         }catch(IOException io){
             LOGGER.log(Level.SEVERE, "No se pudo enviar el paquete. " + io.getMessage());
         }
@@ -450,6 +459,7 @@ public class Client {
 
 
     public static String hexToBinary(String hex){
+
         return completeZeros((new BigInteger(hex, 16)).toString(2));
     }
 

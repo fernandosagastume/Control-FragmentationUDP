@@ -53,12 +53,27 @@ public class Server {
                 StringBuilder fileHex = new StringBuilder();
 
                 while (true) {
+                    byte[] buffer = new byte[1472];
                     //String para que se lea el paquete del cliente
-                    String readClient = dis.readUTF();
-                    mensaje = readClient.toUpperCase();
+                    dis.read(buffer);
+                    /*int conta= buffer.length - 1;
+                    while (conta >= 0 && buffer[conta] == 0) {
+                        --conta;
+                    }
+                    buffer = Arrays.copyOf(buffer, conta+1);*/
+
+                    final StringBuilder builderh = new StringBuilder();
+                    for(byte b : buffer) {
+                        builderh.append(String.format("%02x", b));
+                    }
+
+                    mensaje = (builderh.toString()).toUpperCase();
+
                     //Se construye el paquete del cliente
                     PacketSC psc = PacketSC.buildPacket(mensaje);
-                    if(!psc.packetHEX().equals(""))
+
+                    if(!psc.packetHEX().equals("")){
+                        psc.setDATA((psc.DATA).replaceAll("0+$", ""));
                         LOGGER.log(Level.INFO, "<Client>" + "Server State:  " + SERVER_STATE + " Mensaje del cliente: \n" +
                                 "Source Port: " + psc.SOURCE_PORT + "\nDestination Port: " +
                                 psc.DESTINATION_PORT + "\nSequence Number: " +
@@ -66,6 +81,7 @@ public class Server {
                                 "\nACK Flag: " + psc.ACK_FLAG + "\nSYN Flag: " + psc.SYN_FLAG +
                                 "\nFYN Flag: " + psc.FYN_FLAG + "\n Window Size: " + psc.WINDOW_SIZE +
                                 "\nChecksum: " + psc.CHECKSUM + "\n DATA: " + psc.DATA);
+                    }
 
                     boolean correctChecksum;
                     if(SERVER_STATE == WAITING_CONNECTION || SERVER_STATE == ABOUT_TO_CONNECT ||
@@ -309,10 +325,11 @@ public class Server {
 
     }
     private static void sendData(String data) throws IOException {
+        byte[] decoded = new BigInteger(data, 16).toByteArray();
         //Se crea el packet para enviarse al servidor
         DataOutputStream dos = new DataOutputStream(accept.getOutputStream());
         try{
-            dos.writeUTF(data);
+            dos.write(decoded);
         }catch(IOException io){
             LOGGER.log(Level.SEVERE, "No se pudo enviar el paquete. " + io.getMessage());
         }
